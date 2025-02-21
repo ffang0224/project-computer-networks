@@ -16,6 +16,7 @@
 
 #define STDIN_FD    0
 #define RETRY  120 //millisecond
+#define WINDOW_SIZE 10
 
 int next_seqno=0;
 int send_base=0;
