@@ -13,8 +13,8 @@ LFLAGS   = -Wall
 
 OBJDIR = ../obj
 
-CLIENT_OBJECTS := $(OBJDIR)/rdt_sender.o $(OBJDIR)/common.o $(OBJDIR)/packet.o
-SERVER_OBJECTS := $(OBJDIR)/rdt_receiver.o $(OBJDIR)/common.o $(OBJDIR)/packet.o
+CLIENT_OBJECTS := $(OBJDIR)/rdt_sender.o $(OBJDIR)/common.o $(OBJDIR)/packet.o $(OBJDIR)/window.o 
+SERVER_OBJECTS := $(OBJDIR)/rdt_receiver.o $(OBJDIR)/common.o $(OBJDIR)/packet.o $(OBJDIR)/window.o 
 
 #Program name
 CLIENT := $(OBJDIR)/rdt_sender
@@ -34,7 +34,7 @@ $(SERVER): $(SERVER_OBJECTS)
 	$(LINKER)  $@  $(SERVER_OBJECTS)
 	@echo "Link complete!"
 
-$(OBJDIR)/%.o:	%.c common.h packet.h
+$(OBJDIR)/%.o:	%.c common.h packet.h window.h
 	$(CC) $(CFLAGS)  $< -o $@
 	@echo "Compilation complete!"
 

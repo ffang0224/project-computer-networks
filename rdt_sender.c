@@ -11,15 +11,16 @@
 #include <time.h>
 #include <assert.h>
 
-#include"packet.h"
+// #include"packet.h" // debug: packet.h is included in window.h !!! (rdt_receiver.c should also not include packet.h)
 #include"common.h"
+#include"window.h"
 
 #define STDIN_FD    0
 #define RETRY  120 //millisecond
 
 int next_seqno=0;
-int send_base=0;
-int window_size = 1;
+int send_base=0; // seqno of 
+int window_size = 10;
 
 int sockfd, serverlen;
 struct sockaddr_in serveraddr;
@@ -27,6 +28,7 @@ struct itimerval timer;
 tcp_packet *sndpkt;
 tcp_packet *recvpkt;
 sigset_t sigmask;       
+window *sliding_window;
 
 
 void resend_packets(int sig)
@@ -80,7 +82,7 @@ void init_timer(int delay, void (*sig_handler)(int))
 int main (int argc, char **argv)
 {
     int portno, len;
-    int next_seqno;
+    int next_seqno, base_of_packet; // base_of_packet = beginning byte of a single packet
     char *hostname;
     char buffer[DATA_SIZE];
     FILE *fp;
@@ -119,12 +121,16 @@ int main (int argc, char **argv)
 
     assert(MSS_SIZE - TCP_HDR_SIZE > 0);
 
+    /* Set sliding window */
+    sliding_window = set_window(window_size);
+
     //Stop and wait protocol
 
     init_timer(RETRY, resend_packets);
     next_seqno = 0;
-    while (1)
+    while (1) // iterates every time send_base is updated
     {
+        base_of_packet = send_base;
         len = fread(buffer, 1, DATA_SIZE, fp);
         if ( len <= 0)
         {
@@ -134,27 +140,56 @@ int main (int argc, char **argv)
                     (const struct sockaddr *)&serveraddr, serverlen);
             break;
         }
-        send_base = next_seqno;
-        next_seqno = send_base + len;
-        sndpkt = make_packet(len);
-        memcpy(sndpkt->data, buffer, len);
-        sndpkt->hdr.seqno = send_base;
-        //Wait for ACK
-        do {
+
+        // while(next_seqno <= send_base + window_size)
+        while(buffer_full(sliding_window)!=-1)
+        {
+            // make 1 packet
+            base_of_packet = next_seqno;
+            next_seqno = base_of_packet + len;
+            sndpkt = make_packet(len);
+            memcpy(sndpkt->data, buffer, len);
+            sndpkt->hdr.seqno = base_of_packet;
+
+            add_packet_to_buffer(sndpkt);
 
             VLOG(DEBUG, "Sending packet %d to %s", 
-                    send_base, inet_ntoa(serveraddr.sin_addr));
+                base_of_packet, inet_ntoa(serveraddr.sin_addr));
             /*
-             * If the sendto is called for the first time, the system will
-             * will assign a random port number so that server can send its
-             * response to the src port.
-             */
+            * If the sendto is called for the first time, the system will
+            * will assign a random port number so that server can send its
+            * response to the src port.
+            */
             if(sendto(sockfd, sndpkt, TCP_HDR_SIZE + get_data_size(sndpkt), 0, 
                         ( const struct sockaddr *)&serveraddr, serverlen) < 0)
             {
                 error("sendto");
             }
+        }
+        /*
+        base_of_packet = next_seqno;
+        next_seqno = base_of_packet + len;
+        sndpkt = make_packet(len);
+        memcpy(sndpkt->data, buffer, len);
+        sndpkt->hdr.seqno = base_of_packet;
+        */
 
+        //Wait for ACK
+        do {
+
+            // VLOG(DEBUG, "Sending packet %d to %s", 
+            //         base_of_packet, inet_ntoa(serveraddr.sin_addr));
+            // /*
+            //  * If the sendto is called for the first time, the system will
+            //  * will assign a random port number so that server can send its
+            //  * response to the src port.
+            //  */
+            // if(sendto(sockfd, sndpkt, TCP_HDR_SIZE + get_data_size(sndpkt), 0, 
+            //             ( const struct sockaddr *)&serveraddr, serverlen) < 0)
+            // {
+            //     error("sendto");
+            // }
+            
 
 
             start_timer();
