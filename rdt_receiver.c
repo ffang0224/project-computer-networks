@@ -11,7 +11,7 @@
 
 #include "common.h"
 #include "packet.h"
-
+#include "window.h"
 
 /*
  * You are required to change the implementation to support
@@ -21,6 +21,12 @@
  */
 tcp_packet *recvpkt;
 tcp_packet *sndpkt;
+
+// Sliding window variables
+window *recv_window;
+int window_size = 10;
+int expected_seqno = 0; // Next expected sequence number
+int highest_seqno_received = -1;
 
 int main(int argc, char **argv) {
     int sockfd; /* socket */
@@ -79,6 +85,14 @@ int main(int argc, char **argv) {
         error("ERROR on binding");
 
     /* 
+     * Initialize sliding window
+     */
+    recv_window = set_window(window_size);
+    if (recv_window == NULL) {
+        error("ERROR initializing receiver window");
+    }
+
+    /* 
      * main loop: wait for a datagram, then echo it
      */
     VLOG(DEBUG, "epoch time, bytes received, sequence number");
@@ -93,6 +107,7 @@ int main(int argc, char **argv) {
                 (struct sockaddr *) &clientaddr, (socklen_t *)&clientlen) < 0) {
             error("ERROR in recvfrom");
         }
+        
         recvpkt = (tcp_packet *) buffer;
         assert(get_data_size(recvpkt) <= DATA_SIZE);
         if ( recvpkt->hdr.data_size == 0) {
