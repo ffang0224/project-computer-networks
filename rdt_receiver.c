@@ -24,9 +24,39 @@ tcp_packet *sndpkt;
 
 // Sliding window variables
 window *recv_window;
-int window_size = 10;
-int expected_seqno = 0; // Next expected sequence number
-int highest_seqno_received = -1;
+int window_size = 10;  // Maximum number of packets that can be buffered
+int expected_seqno = 0;  // Sequence number of the next in-order packet we expect to receive
+int highest_seqno_received = -1;  // Tracks the highest sequence number we've seen so far
+
+// Write packets to file in sequential order
+void write_in_order(FILE *fp) {
+    // Cast the void pointer to tcp_packet pointer array for easier access
+    tcp_packet **buffer = (tcp_packet **) recv_window->buffer_ptr;
+    
+    // Keep writing packets as long as we find sequential ones in the buffer
+    while (1) {
+        int found = 0;  // Flag to track if we found the next expected packet
+        for (unsigned int i = 0; i < recv_window->window_size; i++) {
+            // Check if this slot has the packet we're looking for
+            if (buffer[i] != NULL && buffer[i]->hdr.seqno == expected_seqno) {
+                // Position file pointer at the correct offset for this packet
+                fseek(fp, buffer[i]->hdr.seqno, SEEK_SET);
+                // Write the packet's data to the file
+                fwrite(buffer[i]->data, 1, buffer[i]->hdr.data_size, fp);
+                
+                // Move the window forward by the size of data we just wrote
+                expected_seqno += buffer[i]->hdr.data_size;
+                
+                // Free the buffer slot for new packets
+                remove_packet_from_buffer(buffer[i]->hdr.seqno);
+                found = 1;
+                break;
+            }
+        }
+        // Exit if we can't find the next packet in sequence
+        if (!found) break;
+    }
+}
 
 int main(int argc, char **argv) {
     int sockfd; /* socket */
@@ -122,11 +152,32 @@ int main(int argc, char **argv) {
         gettimeofday(&tp, NULL);
         VLOG(DEBUG, "%lu, %d, %d", tp.tv_sec, recvpkt->hdr.data_size, recvpkt->hdr.seqno);
 
-        fseek(fp, recvpkt->hdr.seqno, SEEK_SET);
-        fwrite(recvpkt->data, 1, recvpkt->hdr.data_size, fp);
+        // Check if this packet falls within our current window range
+        if (recvpkt->hdr.seqno >= expected_seqno && 
+            recvpkt->hdr.seqno < expected_seqno + (window_size * DATA_SIZE)) {
+            
+            // Only store the packet if we have space in our buffer
+            if (buffer_full(recv_window) == -1) {  // -1 means buffer is not full
+                // Store this packet in our receive window for potential out-of-order handling
+                add_packet_to_buffer(recvpkt);
+                // Update our highest received sequence number if this packet is newer
+                if (recvpkt->hdr.seqno > highest_seqno_received) {
+                    highest_seqno_received = recvpkt->hdr.seqno;
+                }
+            }
+            
+            // Attempt to write any sequential packets we now have to the file
+            write_in_order(fp);
+        }
+
+        // Create an ACK packet for the sender
         sndpkt = make_packet(0);
-        sndpkt->hdr.ackno = recvpkt->hdr.seqno + recvpkt->hdr.data_size;
+        // Tell sender which sequence number we expect next
+        sndpkt->hdr.ackno = expected_seqno;
+        // Mark this as an ACK packet
         sndpkt->hdr.ctr_flags = ACK;
+        
+        // Send the ACK back to the client
         if (sendto(sockfd, sndpkt, TCP_HDR_SIZE, 0, 
                 (struct sockaddr *) &clientaddr, clientlen) < 0) {
             error("ERROR in sendto");
