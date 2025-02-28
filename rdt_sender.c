@@ -192,8 +192,10 @@ int main (int argc, char **argv)
 
             // Update ACK
             // issue 5
+            int dup_ACK_ctr = 0;
             do      
             {
+                dup_ACK_ctr++;
                 if(recvfrom(sockfd, buffer, MSS_SIZE, 0,
                             (struct sockaddr *) &serveraddr, (socklen_t *)&serverlen) < 0)
                 {
@@ -203,10 +205,12 @@ int main (int argc, char **argv)
                 recvpkt = (tcp_packet *)buffer;
                 printf("%d \n", get_data_size(recvpkt));
                 assert(get_data_size(recvpkt) <= DATA_SIZE);
-            }while(recvpkt->hdr.ackno < next_seqno);    //ignore duplicate ACKs; issue 9
+            }while(recvpkt->hdr.ackno <= send_base && dup_ACK_ctr <= 3);    //ignore duplicate ACKs; issue 9
             stop_timer();
             /*resend pack if don't recv ACK */
-        } while(recvpkt->hdr.ackno != next_seqno);
+        } while(recvpkt->hdr.ackno <= send_base);
+
+        send_base = recvpkt->hdr.ackno; // if cumulative ACK is received successfully, update send_base
     }
 
     return 0;
