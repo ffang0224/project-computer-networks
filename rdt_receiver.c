@@ -39,9 +39,7 @@ void write_in_order(FILE *fp) {
         for (unsigned int i = 0; i < recv_window->window_size; i++) {
             // Check if this slot has the packet we're looking for
             if (buffer[i] != NULL && buffer[i]->hdr.seqno == expected_seqno) {
-                // Position file pointer at the correct offset for this packet
-                fseek(fp, buffer[i]->hdr.seqno, SEEK_SET);
-                // Write the packet's data to the file
+                // Write the packet's data to the file (no seek needed as we write in order)
                 fwrite(buffer[i]->data, 1, buffer[i]->hdr.data_size, fp);
                 
                 // Move the window forward by the size of data we just wrote
@@ -126,14 +124,11 @@ int main(int argc, char **argv) {
      * main loop: wait for a datagram, then echo it
      */
     VLOG(DEBUG, "epoch time, bytes received, sequence number");
-    printf("addr = %s\n", inet_ntoa(serveraddr.sin_addr)); // debug
+    printf("Receiver started. Listening on port %d\n", portno);
 
     clientlen = sizeof(clientaddr);
     while (1) {
-        /*
-         * recvfrom: receive a UDP datagram from a client
-         */
-        VLOG(DEBUG, "waiting from server \n");
+        VLOG(DEBUG, "waiting from server\n");
         if (recvfrom(sockfd, buffer, MSS_SIZE, 0,
                 (struct sockaddr *) &clientaddr, (socklen_t *)&clientlen) < 0) {
             error("ERROR in recvfrom");
@@ -141,14 +136,16 @@ int main(int argc, char **argv) {
         
         recvpkt = (tcp_packet *) buffer;
         assert(get_data_size(recvpkt) <= DATA_SIZE);
-        if ( recvpkt->hdr.data_size == 0) {
+
+        VLOG(DEBUG, "Received packet with seqno %d, size %d", 
+            recvpkt->hdr.seqno, recvpkt->hdr.data_size);
+
+        if (recvpkt->hdr.data_size == 0) {
             VLOG(INFO, "End Of File has been reached");
             fclose(fp);
             break;
         }
-        /* 
-         * sendto: ACK back to the client 
-         */
+
         gettimeofday(&tp, NULL);
         VLOG(DEBUG, "%lu, %d, %d", tp.tv_sec, recvpkt->hdr.data_size, recvpkt->hdr.seqno);
 
@@ -158,16 +155,21 @@ int main(int argc, char **argv) {
             
             // Only store the packet if we have space in our buffer
             if (buffer_full(recv_window) == -1) {  // -1 means buffer is not full
+                // Create a copy of the packet for storage
+                tcp_packet *pkt_copy = make_packet(recvpkt->hdr.data_size);
+                memcpy(pkt_copy, recvpkt, TCP_HDR_SIZE + recvpkt->hdr.data_size);
+                
                 // Store this packet in our receive window for potential out-of-order handling
-                add_packet_to_buffer(recvpkt);
+                add_packet_to_buffer(pkt_copy);
+                
                 // Update our highest received sequence number if this packet is newer
                 if (recvpkt->hdr.seqno > highest_seqno_received) {
                     highest_seqno_received = recvpkt->hdr.seqno;
                 }
+                
+                // Attempt to write any sequential packets we now have to the file
+                write_in_order(fp);
             }
-            
-            // Attempt to write any sequential packets we now have to the file
-            write_in_order(fp);
         }
 
         // Create an ACK packet for the sender
@@ -177,11 +179,15 @@ int main(int argc, char **argv) {
         // Mark this as an ACK packet
         sndpkt->hdr.ctr_flags = ACK;
         
+        VLOG(DEBUG, "Sending ACK for seqno %d", expected_seqno);
+        
         // Send the ACK back to the client
         if (sendto(sockfd, sndpkt, TCP_HDR_SIZE, 0, 
                 (struct sockaddr *) &clientaddr, clientlen) < 0) {
             error("ERROR in sendto");
         }
+        
+        free(sndpkt);  // Free the ACK packet after sending
     }
 
     return 0;

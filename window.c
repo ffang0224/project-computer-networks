@@ -148,3 +148,18 @@ void remove_packet_from_buffer(int seqno) {
     }
     // If we reach here, no packet with the given sequence number was found
 }
+
+// returns a pointer to a packet with the smallest sequence number in the buffer; 
+// used in packet retransmission
+tcp_packet* return_packet_of_smallest_seqno()
+{
+    if (global_window == NULL || global_window->buffer_ptr == NULL) {
+        return NULL;  // Error case - invalid window
+    }
+    
+    tcp_packet **buffer = (tcp_packet **) global_window->buffer_ptr;
+    unsigned int idx = global_window->smallest_seqno_idx;
+    
+    // Return the packet at the tracked smallest sequence number index
+    return buffer[idx];
+}
