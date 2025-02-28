@@ -39,9 +39,7 @@ void write_in_order(FILE *fp) {
         for (unsigned int i = 0; i < recv_window->window_size; i++) {
             // Check if this slot has the packet we're looking for
             if (buffer[i] != NULL && buffer[i]->hdr.seqno == expected_seqno) {
-                // Position file pointer at the correct offset for this packet
-                fseek(fp, buffer[i]->hdr.seqno, SEEK_SET);
-                // Write the packet's data to the file
+                // Write the packet's data to the file (no seek needed as we write in order)
                 fwrite(buffer[i]->data, 1, buffer[i]->hdr.data_size, fp);
                 
                 // Move the window forward by the size of data we just wrote

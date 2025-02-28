@@ -36,17 +36,20 @@ window *sliding_window;
 // debug: add comments
 
 */
-void resend_packets(int sig) // issue 4
+void resend_packets(int sig)
 {
     if (sig == SIGALRM)
     {
-        VLOG(INFO, "Timeout happend");
-        if(sendto(sockfd, resending_pkt_ptr, TCP_HDR_SIZE + get_data_size(resending_pkt_ptr), 0, 
-                    ( const struct sockaddr *)&serveraddr, serverlen) < 0)
-        {
-            error("sendto");
+        VLOG(INFO, "Timeout happened");
+        // Get packet with smallest sequence number in window
+        tcp_packet *pkt_to_resend = return_packet_of_smallest_seqno();
+        if (pkt_to_resend != NULL) {
+            if(sendto(sockfd, pkt_to_resend, TCP_HDR_SIZE + get_data_size(pkt_to_resend), 0, 
+                        ( const struct sockaddr *)&serveraddr, serverlen) < 0)
+            {
+                error("sendto");
+            }
         }
-            
     }
 }
 
@@ -80,6 +83,15 @@ void init_timer(int delay, void (*sig_handler)(int))
     sigaddset(&sigmask, SIGALRM);
 }
 
+// Helper function to clean acknowledged packets from buffer
+void clean_acked_packets(int ack_no) {
+    tcp_packet **buffer = (tcp_packet **) sliding_window->buffer_ptr;
+    for (unsigned int i = 0; i < sliding_window->window_size; i++) {
+        if (buffer[i] != NULL && buffer[i]->hdr.seqno < ack_no) {
+            remove_packet_from_buffer(buffer[i]->hdr.seqno);
+        }
+    }
+}
 
 int main (int argc, char **argv)
 {
@@ -183,34 +195,51 @@ int main (int argc, char **argv)
         //Wait for ACK
         do {
             start_timer();
-            //ssize_t recvfrom(int sockfd, void *buf, size_t len, int flags,
-            //struct sockaddr *src_addr, socklen_t *addrlen);
-
-
-            resending_pkt_ptr = return_packet_of_smallest_seqno(); // In retransmission, 
-                                                                   // resend_packets() should send the packet with smallest seq number in the buffer
-
-            // Update ACK
-            // issue 5
-            int dup_ACK_ctr = 0;
-            do      
+            
+            // Get the packet with smallest sequence number for potential retransmission
+            resending_pkt_ptr = return_packet_of_smallest_seqno();
+            
+            int last_ack = -1;
+            int dup_ack_count = 0;
+            
+            // Process ACKs
+            if(recvfrom(sockfd, buffer, MSS_SIZE, 0,
+                        (struct sockaddr *) &serveraddr, (socklen_t *)&serverlen) < 0)
             {
-                dup_ACK_ctr++;
-                if(recvfrom(sockfd, buffer, MSS_SIZE, 0,
-                            (struct sockaddr *) &serveraddr, (socklen_t *)&serverlen) < 0)
-                {
-                    error("recvfrom");
+                error("recvfrom");
+            }
+            
+            recvpkt = (tcp_packet *)buffer;
+            assert(get_data_size(recvpkt) <= DATA_SIZE);
+            
+            // Check for duplicate ACKs
+            if (recvpkt->hdr.ackno == last_ack) {
+                dup_ack_count++;
+                if (dup_ack_count >= 3) {
+                    // Fast retransmit
+                    if (resending_pkt_ptr != NULL) {
+                        if(sendto(sockfd, resending_pkt_ptr, TCP_HDR_SIZE + get_data_size(resending_pkt_ptr), 0, 
+                                    ( const struct sockaddr *)&serveraddr, serverlen) < 0)
+                        {
+                            error("sendto");
+                        }
+                    }
+                    dup_ack_count = 0;
                 }
-
-                recvpkt = (tcp_packet *)buffer;
-                printf("%d \n", get_data_size(recvpkt));
-                assert(get_data_size(recvpkt) <= DATA_SIZE);
-            }while(recvpkt->hdr.ackno <= send_base && dup_ACK_ctr <= 3);    //ignore duplicate ACKs; issue 9
+            } else {
+                last_ack = recvpkt->hdr.ackno;
+                dup_ack_count = 1;
+            }
+            
             stop_timer();
-            /*resend pack if don't recv ACK */
+            
+            // If we got a new ACK, clean up acknowledged packets
+            if (recvpkt->hdr.ackno > send_base) {
+                clean_acked_packets(recvpkt->hdr.ackno);
+                send_base = recvpkt->hdr.ackno;
+            }
+            
         } while(recvpkt->hdr.ackno <= send_base);
-
-        send_base = recvpkt->hdr.ackno; // if cumulative ACK is received successfully, update send_base
     }
 
     return 0;
