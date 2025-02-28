@@ -27,18 +27,21 @@ struct sockaddr_in serveraddr;
 struct itimerval timer; 
 tcp_packet *sndpkt;
 tcp_packet *recvpkt;
+tcp_packet *resending_pkt_ptr; // pointer to packet that needs to be resent; used in resend_packets()
 sigset_t sigmask;       
 window *sliding_window;
 
+/*
 
-void resend_packets(int sig)
+// debug: add comments
+
+*/
+void resend_packets(int sig) // issue 4
 {
     if (sig == SIGALRM)
     {
-        //Resend all packets range between 
-        //sendBase and nextSeqNum
         VLOG(INFO, "Timeout happend");
-        if(sendto(sockfd, sndpkt, TCP_HDR_SIZE + get_data_size(sndpkt), 0, 
+        if(sendto(sockfd, resending_pkt_ptr, TCP_HDR_SIZE + get_data_size(resending_pkt_ptr), 0, 
                     ( const struct sockaddr *)&serveraddr, serverlen) < 0)
         {
             error("sendto");
@@ -46,7 +49,6 @@ void resend_packets(int sig)
             
     }
 }
-
 
 void start_timer()
 {
@@ -124,14 +126,16 @@ int main (int argc, char **argv)
     /* Set sliding window */
     sliding_window = set_window(window_size);
 
-    //Stop and wait protocol
+    //Go-Back-N Protocol
 
-    init_timer(RETRY, resend_packets);
+    init_timer(RETRY, resend_packets); // issue 3
     next_seqno = 0;
-    while (1) // iterates every time send_base is updated
+    while (1) // iterates every time send_base is updated (send_base should NOT be changed except for sliding the window)
     {
         base_of_packet = send_base;
         len = fread(buffer, 1, DATA_SIZE, fp);
+
+        /* check whether End of File has been reached */
         if ( len <= 0)
         {
             VLOG(INFO, "End Of File has been reached");
@@ -141,17 +145,22 @@ int main (int argc, char **argv)
             break;
         }
 
-        // while(next_seqno <= send_base + window_size)
+        /* repeat making a packet until the window buffer is full;
+           at first RTT, this will repeat 10 times, which is the window size
+        */
         while(buffer_full(sliding_window)!=-1)
         {
             // make 1 packet
             base_of_packet = next_seqno;
             next_seqno = base_of_packet + len;
-            sndpkt = make_packet(len);
+            sndpkt = make_packet(len);          // debug: will the previous packet get overwritten safely?
+                                                // malloc is in make_packet(), not in rdt_sender.c
+                                                // so, free(sndpkt) should be called making the next packet
             memcpy(sndpkt->data, buffer, len);
             sndpkt->hdr.seqno = base_of_packet;
 
-            add_packet_to_buffer(sndpkt);
+            add_packet_to_buffer(sndpkt); // add the whole packet to window buffer;
+                                          // when a packet needs to be retransmitted, sender uses data in packet_in_buffer->hdr.seqno
 
             VLOG(DEBUG, "Sending packet %d to %s", 
                 base_of_packet, inet_ntoa(serveraddr.sin_addr));
@@ -165,38 +174,25 @@ int main (int argc, char **argv)
             {
                 error("sendto");
             }
+
+            free(sndpkt); // each make_packet() call does new malloc; 
+                          // so, free the old packet before making the next packet;
+                          // resend_packets() is modified, so that it uses resending_pkt_ptr instead of the sndpkt variable
         }
-        /*
-        base_of_packet = next_seqno;
-        next_seqno = base_of_packet + len;
-        sndpkt = make_packet(len);
-        memcpy(sndpkt->data, buffer, len);
-        sndpkt->hdr.seqno = base_of_packet;
-        */
 
         //Wait for ACK
         do {
-
-            // VLOG(DEBUG, "Sending packet %d to %s", 
-            //         base_of_packet, inet_ntoa(serveraddr.sin_addr));
-            // /*
-            //  * If the sendto is called for the first time, the system will
-            //  * will assign a random port number so that server can send its
-            //  * response to the src port.
-            //  */
-            // if(sendto(sockfd, sndpkt, TCP_HDR_SIZE + get_data_size(sndpkt), 0, 
-            //             ( const struct sockaddr *)&serveraddr, serverlen) < 0)
-            // {
-            //     error("sendto");
-            // }
-            
-
-
             start_timer();
             //ssize_t recvfrom(int sockfd, void *buf, size_t len, int flags,
             //struct sockaddr *src_addr, socklen_t *addrlen);
 
-            do
+
+            resending_pkt_ptr = return_packet_of_smallest_seqno(); // In retransmission, 
+                                                                   // resend_packets() should send the packet with smallest seq number in the buffer
+
+            // Update ACK
+            // issue 5
+            do      
             {
                 if(recvfrom(sockfd, buffer, MSS_SIZE, 0,
                             (struct sockaddr *) &serveraddr, (socklen_t *)&serverlen) < 0)
@@ -207,12 +203,10 @@ int main (int argc, char **argv)
                 recvpkt = (tcp_packet *)buffer;
                 printf("%d \n", get_data_size(recvpkt));
                 assert(get_data_size(recvpkt) <= DATA_SIZE);
-            }while(recvpkt->hdr.ackno < next_seqno);    //ignore duplicate ACKs
+            }while(recvpkt->hdr.ackno < next_seqno);    //ignore duplicate ACKs; issue 9
             stop_timer();
             /*resend pack if don't recv ACK */
-        } while(recvpkt->hdr.ackno != next_seqno);      
-
-        free(sndpkt);
+        } while(recvpkt->hdr.ackno != next_seqno);
     }
 
     return 0;
