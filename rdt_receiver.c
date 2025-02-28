@@ -30,50 +30,29 @@ int highest_seqno_received = -1;  // Tracks the highest sequence number we've se
 
 // Write packets to file in sequential order
 void write_in_order(FILE *fp) {
+    // Cast the void pointer to tcp_packet pointer array for easier access
     tcp_packet **buffer = (tcp_packet **) recv_window->buffer_ptr;
-    int packets_written = 0;
     
+    // Keep writing packets as long as we find sequential ones in the buffer
     while (1) {
-        int found = 0;
-        tcp_packet *next_packet = NULL;
-        unsigned int next_packet_idx = 0;
-        
-        // Find the packet with the expected sequence number
+        int found = 0;  // Flag to track if we found the next expected packet
         for (unsigned int i = 0; i < recv_window->window_size; i++) {
+            // Check if this slot has the packet we're looking for
             if (buffer[i] != NULL && buffer[i]->hdr.seqno == expected_seqno) {
-                next_packet = buffer[i];
-                next_packet_idx = i;
+                // Write the packet's data to the file (no seek needed as we write in order)
+                fwrite(buffer[i]->data, 1, buffer[i]->hdr.data_size, fp);
+                
+                // Move the window forward by the size of data we just wrote
+                expected_seqno += buffer[i]->hdr.data_size;
+                
+                // Free the buffer slot for new packets
+                remove_packet_from_buffer(buffer[i]->hdr.seqno);
                 found = 1;
                 break;
             }
         }
-        
-        if (!found) {
-            break;  // Couldn't find the next expected packet
-        }
-        
-        // Write the packet's data
-        size_t bytes_written = fwrite(next_packet->data, 1, next_packet->hdr.data_size, fp);
-        if (bytes_written != next_packet->hdr.data_size) {
-            error("Failed to write complete packet data");
-        }
-        
-        // Update expected sequence number
-        expected_seqno += next_packet->hdr.data_size;
-        
-        // Remove the written packet from buffer
-        remove_packet_from_buffer(next_packet->hdr.seqno);
-        packets_written++;
-        
-        // Flush the file periodically
-        if (packets_written % 100 == 0) {
-            fflush(fp);
-        }
-    }
-    
-    // Final flush
-    if (packets_written > 0) {
-        fflush(fp);
+        // Exit if we can't find the next packet in sequence
+        if (!found) break;
     }
 }
 
@@ -171,38 +150,24 @@ int main(int argc, char **argv) {
         VLOG(DEBUG, "%lu, %d, %d", tp.tv_sec, recvpkt->hdr.data_size, recvpkt->hdr.seqno);
 
         // Check if this packet falls within our current window range
-        // Use unsigned arithmetic to avoid overflow
-        unsigned int window_end = expected_seqno + (window_size * DATA_SIZE);
-        if ((unsigned int)recvpkt->hdr.seqno >= (unsigned int)expected_seqno && 
-            (unsigned int)recvpkt->hdr.seqno < window_end) {
+        if (recvpkt->hdr.seqno >= expected_seqno && 
+            recvpkt->hdr.seqno < expected_seqno + (window_size * DATA_SIZE)) {
             
-            // Only store the packet if we haven't already received it
-            tcp_packet **buffer = (tcp_packet **) recv_window->buffer_ptr;
-            int already_received = 0;
-            for (unsigned int i = 0; i < recv_window->window_size; i++) {
-                if (buffer[i] != NULL && buffer[i]->hdr.seqno == recvpkt->hdr.seqno) {
-                    already_received = 1;
-                    break;
-                }
-            }
-            
-            if (!already_received && buffer_full(recv_window) == -1) {
+            // Only store the packet if we have space in our buffer
+            if (buffer_full(recv_window) == -1) {  // -1 means buffer is not full
                 // Create a copy of the packet for storage
                 tcp_packet *pkt_copy = make_packet(recvpkt->hdr.data_size);
-                if (pkt_copy == NULL) {
-                    error("Failed to allocate memory for packet copy");
-                }
                 memcpy(pkt_copy, recvpkt, TCP_HDR_SIZE + recvpkt->hdr.data_size);
                 
-                // Store this packet in our receive window
+                // Store this packet in our receive window for potential out-of-order handling
                 add_packet_to_buffer(pkt_copy);
                 
-                // Update highest received sequence number
-                if ((unsigned int)recvpkt->hdr.seqno > (unsigned int)highest_seqno_received) {
+                // Update our highest received sequence number if this packet is newer
+                if (recvpkt->hdr.seqno > highest_seqno_received) {
                     highest_seqno_received = recvpkt->hdr.seqno;
                 }
                 
-                // Try to write packets in order
+                // Attempt to write any sequential packets we now have to the file
                 write_in_order(fp);
             }
         }

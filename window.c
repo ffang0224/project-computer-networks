@@ -13,9 +13,10 @@ window* set_window(unsigned int window_size)
         return NULL;  // Memory allocation failed
     }
     
-    w->window_size = window_size;  // Window size in packets
+    w->window_size = window_size;
     
     // Allocate memory for the buffer to hold packet pointers
+    // We use void* in the struct but cast it to tcp_packet** for usage
     w->buffer_ptr = malloc(window_size * sizeof(tcp_packet *));
     if (w->buffer_ptr == NULL) {
         free(w);  // Clean up the window structure if buffer allocation fails
@@ -45,16 +46,14 @@ int buffer_full(window *w)
     
     tcp_packet **buffer = (tcp_packet **) w->buffer_ptr;
     
-    // Count occupied slots
-    unsigned int occupied_slots = 0;
+    // Check if any slot is empty - if so, the buffer is not full
     for (unsigned int i = 0; i < w->window_size; i++) {
-        if (buffer[i] != NULL) {
-            occupied_slots++;
+        if (buffer[i] == NULL) {
+            return -1;  // Buffer is not full - found at least one empty slot
         }
     }
     
-    // Buffer is full if all slots are occupied (window size is in packets)
-    return (occupied_slots >= w->window_size) ? 1 : -1;
+    return 1;  // Buffer is full - no empty slots found
 }
 
 // Helper function to find the first empty slot in the buffer
@@ -65,14 +64,14 @@ static int find_empty_slot(window *w) {
     
     tcp_packet **buffer = (tcp_packet **) w->buffer_ptr;
     
-    // Find first empty slot
+    // Iterate through the buffer to find the first NULL (empty) slot
     for (unsigned int i = 0; i < w->window_size; i++) {
         if (buffer[i] == NULL) {
-            return i;
+            return i;  // Return the index of the first empty slot
         }
     }
     
-    return -1;  // No empty slots found
+    return -1;  // No empty slots found - buffer is full
 }
 
 // Adds a packet to the window buffer in the first available slot
@@ -88,7 +87,8 @@ void add_packet_to_buffer(tcp_packet *pkt)
     // Find an empty slot in the buffer using helper function
     int empty_slot = find_empty_slot(global_window);
     if (empty_slot == -1) {
-        printf("Warning: Could not add packet to buffer - window full\n");
+        // Buffer is full - cannot add the packet
+        printf("Warning: Could not add packet to buffer because it is full\n");
         return;
     }
     
@@ -105,9 +105,11 @@ void add_packet_to_buffer(tcp_packet *pkt)
 }
 
 // Removes a packet with the specified sequence number from the buffer
+// Also updates the smallest sequence number tracking if needed
 void remove_packet_from_buffer(int seqno) {
+    // Input validation
     if (global_window == NULL || global_window->buffer_ptr == NULL) {
-        return;
+        return;  // Error case - invalid window
     }
     
     tcp_packet **buffer = (tcp_packet **) global_window->buffer_ptr;
@@ -115,38 +117,49 @@ void remove_packet_from_buffer(int seqno) {
     // Search for the packet with the given sequence number
     for (unsigned int i = 0; i < global_window->window_size; i++) {
         if (buffer[i] != NULL && buffer[i]->hdr.seqno == seqno) {
-            // Free the packet and mark slot as empty
+            // Found the packet - free its memory and mark the slot as empty
             free(buffer[i]);
             buffer[i] = NULL;
             
             // If we removed the packet with the smallest sequence number,
-            // find the new smallest
+            // we need to find the new smallest sequence number
             if (i == global_window->smallest_seqno_idx) {
+                // Initialize variables to track the new smallest sequence number
                 int smallest_seqno = -1;
                 unsigned int new_idx = 0;
                 
+                // Iterate through all slots to find the new smallest sequence number
                 for (unsigned int j = 0; j < global_window->window_size; j++) {
-                    if (buffer[j] != NULL && 
-                        (smallest_seqno == -1 || buffer[j]->hdr.seqno < smallest_seqno)) {
+                    if (buffer[j] != NULL && (smallest_seqno == -1 || buffer[j]->hdr.seqno < smallest_seqno)) {
                         smallest_seqno = buffer[j]->hdr.seqno;
                         new_idx = j;
                     }
                 }
                 
-                global_window->smallest_seqno_idx = (smallest_seqno != -1) ? new_idx : 0;
+                // Update the smallest_seqno_idx if we found a new smallest packet
+                if (smallest_seqno != -1) {
+                    global_window->smallest_seqno_idx = new_idx;
+                }
+                // If no packets left, smallest_seqno_idx stays at 0
             }
-            return;
+            
+            return;  // Packet removed successfully
         }
     }
+    // If we reach here, no packet with the given sequence number was found
 }
 
-// Returns pointer to packet with smallest sequence number in the buffer
+// returns a pointer to a packet with the smallest sequence number in the buffer; 
+// used in packet retransmission
 tcp_packet* return_packet_of_smallest_seqno()
 {
     if (global_window == NULL || global_window->buffer_ptr == NULL) {
-        return NULL;
+        return NULL;  // Error case - invalid window
     }
     
     tcp_packet **buffer = (tcp_packet **) global_window->buffer_ptr;
-    return buffer[global_window->smallest_seqno_idx];
+    unsigned int idx = global_window->smallest_seqno_idx;
+    
+    // Return the packet at the tracked smallest sequence number index
+    return buffer[idx];
 }

@@ -42,9 +42,7 @@ void clean_acked_packets(int ack_no);
 void clean_acked_packets(int ack_no) {
     tcp_packet **buffer = (tcp_packet **) sliding_window->buffer_ptr;
     for (unsigned int i = 0; i < sliding_window->window_size; i++) {
-        if (buffer[i] != NULL && 
-            (unsigned int)buffer[i]->hdr.seqno < (unsigned int)ack_no) {
-            VLOG(DEBUG, "Removing acknowledged packet %d", buffer[i]->hdr.seqno);
+        if (buffer[i] != NULL && buffer[i]->hdr.seqno < ack_no) {
             remove_packet_from_buffer(buffer[i]->hdr.seqno);
         }
     }
@@ -55,7 +53,6 @@ void resend_packets(int sig)
     if (sig == SIGALRM)
     {
         VLOG(INFO, "Timeout happened");
-        
         // Get packet with smallest sequence number in window
         tcp_packet *pkt_to_resend = return_packet_of_smallest_seqno();
         if (pkt_to_resend != NULL) {
@@ -65,8 +62,6 @@ void resend_packets(int sig)
             {
                 error("sendto");
             }
-            // Restart timer for this packet
-            start_timer();
         }
     }
 }
@@ -200,16 +195,10 @@ int main (int argc, char **argv)
             recvpkt = (tcp_packet *)buffer;
             VLOG(DEBUG, "Received ACK %d", recvpkt->hdr.ackno);
             
-            if ((unsigned int)recvpkt->hdr.ackno > (unsigned int)send_base) {
+            if (recvpkt->hdr.ackno > send_base) {
                 stop_timer();
                 clean_acked_packets(recvpkt->hdr.ackno);
                 send_base = recvpkt->hdr.ackno;
-                
-                // Only restart timer if there are unacked packets
-                if (send_base < next_seqno) {
-                    start_timer();
-                }
-                
                 // Only continue sending if we have more data and window space
                 if (len > 0 && buffer_full(sliding_window) == -1) {
                     break;
