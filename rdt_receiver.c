@@ -32,6 +32,9 @@ tcp_packet *recvpkt;  // Added declaration for recvpkt
 int next_expected_seqno = 0;  // Next expected sequence number
 int receiver_window_size = WINDOW_SIZE;
 
+// File for throughput data
+FILE *throughput_fp = NULL;
+
 // Initialize the packet buffer
 void init_packet_buffer() {
     for (int i = 0; i < WINDOW_SIZE; i++) {
@@ -105,10 +108,20 @@ int main(int argc, char **argv) {
     }
     portno = atoi(argv[1]);
 
-    fp  = fopen(argv[2], "w");
+    fp = fopen(argv[2], "w");
     if (fp == NULL) {
         error(argv[2]);
     }
+    
+    // Open throughput data file
+    throughput_fp = fopen("throughput_data.txt", "w");
+    if (throughput_fp == NULL) {
+        error("Cannot open throughput_data.txt");
+    }
+    
+    // Write header for throughput data
+    fprintf(throughput_fp, "epoch time, bytes received, sequence number\n");
+    fflush(throughput_fp);
 
     /* 
      * socket: create the parent socket 
@@ -165,11 +178,18 @@ int main(int argc, char **argv) {
         if (recvpkt->hdr.data_size == 0) {
             VLOG(INFO, "End Of File has been reached");
             fclose(fp);
+            fclose(throughput_fp); // Close throughput data file
             break;
         }
         
         gettimeofday(&tp, NULL);
+        
+        // Log throughput data to both console and file
         VLOG(DEBUG, "%lu, %d, %d", tp.tv_sec, recvpkt->hdr.data_size, recvpkt->hdr.seqno);
+        
+        // Write to throughput data file
+        fprintf(throughput_fp, "%lu, %d, %d\n", tp.tv_sec, recvpkt->hdr.data_size, recvpkt->hdr.seqno);
+        fflush(throughput_fp);
         
         // Calculate if this packet is within our window
         if (recvpkt->hdr.seqno >= next_expected_seqno && 
