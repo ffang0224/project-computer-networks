@@ -35,7 +35,10 @@ int receiver_window_size = WINDOW_SIZE;
 // File for throughput data
 FILE *throughput_fp = NULL;
 
-// Initialize the packet buffer
+/*
+ * Initialize the packet buffer
+ * Sets all buffer slots to empty (received=0, packet=NULL)
+ */
 void init_packet_buffer() {
     for (int i = 0; i < WINDOW_SIZE; i++) {
         recv_buffer[i].received = 0;
@@ -113,59 +116,45 @@ int main(int argc, char **argv) {
         error(argv[2]);
     }
     
-    // Open throughput data file
+    // Open throughput data file for performance analysis
     throughput_fp = fopen("throughput_data.txt", "w");
     if (throughput_fp == NULL) {
         error("Cannot open throughput_data.txt");
     }
     
-    // Write header for throughput data
+    // Write header for throughput data (CSV format)
     fprintf(throughput_fp, "epoch time, bytes received, sequence number\n");
     fflush(throughput_fp);
 
-    /* 
-     * socket: create the parent socket 
-     */
+    // Create the parent socket
     sockfd = socket(AF_INET, SOCK_DGRAM, 0);
     if (sockfd < 0) 
         error("ERROR opening socket");
 
-    /* setsockopt: Handy debugging trick that lets 
-     * us rerun the server immediately after we kill it; 
-     * otherwise we have to wait about 20 secs. 
-     * Eliminates "ERROR on binding: Address already in use" error. 
-     */
+    //Allow the socket to be reused immediately after the program is killed
     optval = 1;
     setsockopt(sockfd, SOL_SOCKET, SO_REUSEADDR, 
             (const void *)&optval , sizeof(int));
 
-    /*
-     * build the server's Internet address
-     */
+    // Build the server's Internet address
     bzero((char *) &serveraddr, sizeof(serveraddr));
     serveraddr.sin_family = AF_INET;
     serveraddr.sin_addr.s_addr = htonl(INADDR_ANY);
     serveraddr.sin_port = htons((unsigned short)portno);
 
-    /* 
-     * bind: associate the parent socket with a port 
-     */
+    //Bind the parent socket to a port
     if (bind(sockfd, (struct sockaddr *) &serveraddr, 
                 sizeof(serveraddr)) < 0) 
         error("ERROR on binding");
 
-    /* 
-     * main loop: wait for a datagram, then echo it
-     */
+    //Log the header for throughput data
     VLOG(DEBUG, "epoch time, bytes received, sequence number");
 
     clientlen = sizeof(clientaddr);
     init_packet_buffer();  // Initialize the packet buffer
     
     while (1) {
-        /*
-         * recvfrom: receive a UDP datagram from a client
-         */
+        // Receive a UDP datagram from a client
         if (recvfrom(sockfd, buffer, MSS_SIZE, 0,
                 (struct sockaddr *) &clientaddr, (socklen_t *)&clientlen) < 0) {
             error("ERROR in recvfrom");
@@ -187,11 +176,16 @@ int main(int argc, char **argv) {
         // Log throughput data to both console and file
         VLOG(DEBUG, "%lu, %d, %d", tp.tv_sec, recvpkt->hdr.data_size, recvpkt->hdr.seqno);
         
-        // Write to throughput data file
+        // Write to throughput data file - no spaces after commas for plotting script compatibility
         fprintf(throughput_fp, "%lu,%d,%d\n", tp.tv_sec, recvpkt->hdr.data_size, recvpkt->hdr.seqno);
         fflush(throughput_fp);
         
-        // Calculate if this packet is within our window
+        /*
+         * Check if the received packet is within our window
+         * We accept packets if:
+         * 1. seqno >= next_expected_seqno (not older than what we expect)
+         * 2. seqno < next_expected_seqno + window_size*DATA_SIZE (within our window)
+         */
         if (recvpkt->hdr.seqno >= next_expected_seqno && 
             recvpkt->hdr.seqno < next_expected_seqno + receiver_window_size * DATA_SIZE) {
             
@@ -209,6 +203,7 @@ int main(int argc, char **argv) {
                          recvpkt->hdr.seqno, window_index, recvpkt->hdr.data_size);
                     
                     // If this is the next expected packet, write contiguous packets
+                    // Only advance when we get in-order packets
                     if (window_index == 0) {
                         write_contiguous_packets(fp);
                     }
@@ -216,9 +211,7 @@ int main(int argc, char **argv) {
             }
         }
         
-        /* 
-         * sendto: ACK back to the client 
-         */
+        //Send cumulative ACK back to the client
         sndpkt = make_packet(0);
         sndpkt->hdr.ackno = next_expected_seqno;
         sndpkt->hdr.ctr_flags = ACK;

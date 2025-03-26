@@ -39,16 +39,17 @@ void free_window_buffer(int index);
 void resize_window_buffer();
 void store_packet(tcp_packet *pkt, int index, int size);
 
-int next_seqno=0;
-int send_base=0;
-float cwnd = 1.0;          // Congestion window size (in packets)
-int ssthresh = 32;         // Slow start threshold (in packets)
-int cc_state = SLOW_START; // Congestion control state
-int dup_acks = 0;          // Count of duplicate ACKs
-int last_ack = 0;          // Last ACK received
-int packets_sent = 0;      // Count of packets sent in current window
+// Window and sequence tracking variables
+int next_seqno=0;                // Next sequence number to be sent
+int send_base=0;                 // Oldest unacknowledged sequence number
+float cwnd = 1.0;                // Congestion window size (in packets)
+int ssthresh = 64;               // Slow start threshold (in packets)
+int cc_state = SLOW_START;       // Current congestion control state
+int dup_acks = 0;                // Count of duplicate ACKs
+int last_ack = 0;                // Last ACK received
+int packets_sent = 0;            // Count of packets sent in current window
 
-// RTT estimation variables
+// RTT estimation variables (RFC 6298)
 int rtt_measured = 0;            // Whether we've measured an RTT sample
 float estimated_rtt = 0;         // Estimated RTT
 float dev_rtt = 0;               // Deviation RTT
@@ -81,7 +82,7 @@ long get_current_time_ms() {
            (now.tv_usec - start_time.tv_usec) / 1000;
 }
 
-// Log CWND changes to file
+// Log CWND changes to file for visualization and analysis
 void log_cwnd() {
     if (cwnd_file) {
         fprintf(cwnd_file, "%ld,%f\n", get_current_time_ms(), cwnd);
@@ -89,19 +90,20 @@ void log_cwnd() {
     }
 }
 
-// Function to check if window is full
+// Function to check if window is full (we've sent as many packets as allowed by cwnd)
 int is_window_full() {
     return packets_sent >= (int)floor(cwnd);
 }
 
 // Function to get window index for a sequence number
+// Using fixed window size to prevent buffer indexing issues when cwnd changes
 int get_window_index(int seqno) {
     // Use fixed window size instead of variable cwnd for index calculation
     // This prevents issues with changing cwnd values affecting buffer indexing
     return (seqno / DATA_SIZE) % window_size;
 }
 
-// Initialize the window buffer
+// Initialize the window buffer to store packets for potential retransmission
 void init_window_buffer(int size) {
     window_size = size;
     window_buffer = (tcp_packet **)malloc(size * sizeof(tcp_packet *));
@@ -131,7 +133,7 @@ void free_window_buffer(int index) {
     }
 }
 
-// Resize window buffer if needed
+// Resize window buffer if needed to accommodate growing congestion window
 void resize_window_buffer() {
     int new_size = (int)ceil(cwnd) * 2;  // Double the size for safety
     if (new_size > window_size) {
@@ -165,7 +167,7 @@ void resize_window_buffer() {
     }
 }
 
-// Store a packet in the window buffer
+// Store a packet in the window buffer for potential retransmission
 void store_packet(tcp_packet *pkt, int index, int size) {
     if (index >= window_size) {
         resize_window_buffer();
@@ -179,12 +181,14 @@ void store_packet(tcp_packet *pkt, int index, int size) {
     packet_sent_time[index] = get_current_time_ms();
 }
 
+// Start the retransmission timer
 void start_timer()
 {
     sigprocmask(SIG_UNBLOCK, &sigmask, NULL);
     setitimer(ITIMER_REAL, &timer, NULL);
 }
 
+// Stop the retransmission timer
 void stop_timer()
 {
     sigprocmask(SIG_BLOCK, &sigmask, NULL);
@@ -248,8 +252,6 @@ void resend_packets(int sig)
         }
     }
 }
-
-// Update RTT estimation (RFC 6298)
 void update_rtt(int measured_rtt_ms) {
     // Validate that RTT is positive and reasonable
     if (measured_rtt_ms <= 0 || measured_rtt_ms > 60000) {
@@ -450,6 +452,7 @@ int main (int argc, char **argv)
             // Update congestion window based on current state
             if (cc_state == SLOW_START) {
                 // In slow start, increment CWND by 1 for each ACK
+                // This causes exponential growth (doubles each RTT)
                 cwnd += 1.0;
                 VLOG(DEBUG, "Slow start: Increasing CWND to %.2f", cwnd);
                 
@@ -460,6 +463,7 @@ int main (int argc, char **argv)
                 }
             } else if (cc_state == CONGESTION_AVOIDANCE) {
                 // In congestion avoidance, increase CWND by 1/CWND for each ACK
+                // This results in linear growth of ~1 packet per RTT
                 cwnd += 1.0 / cwnd;
                 VLOG(DEBUG, "Congestion avoidance: Increasing CWND to %.2f", cwnd);
             }
