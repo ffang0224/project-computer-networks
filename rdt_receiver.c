@@ -19,8 +19,71 @@
  * In the current implementation the window size is one, hence we have
  * only one send and receive packet
  */
-tcp_packet *recvpkt;
+#define WINDOW_SIZE 10
+#define MAX_SEQ_NO 256000  // Large enough sequence number space
+
+typedef struct {
+    int received;        // Whether this packet has been received
+    tcp_packet *packet;  // The actual packet
+} packet_buffer;
+
+packet_buffer recv_buffer[WINDOW_SIZE];  // Buffer for out-of-order packets
 tcp_packet *sndpkt;
+int next_expected_seqno = 0;  // Next expected sequence number
+int receiver_window_size = WINDOW_SIZE;
+
+// Initialize the packet buffer
+void init_packet_buffer() {
+    for (int i = 0; i < WINDOW_SIZE; i++) {
+        recv_buffer[i].received = 0;
+        recv_buffer[i].packet = NULL;
+    }
+}
+
+// Function to get window index for a sequence number
+int get_window_index(int seqno) {
+    return ((seqno - next_expected_seqno) / DATA_SIZE) % WINDOW_SIZE;
+}
+
+// Free a packet in the buffer
+void free_packet_buffer(int index) {
+    if (recv_buffer[index].packet != NULL) {
+        free(recv_buffer[index].packet);
+        recv_buffer[index].packet = NULL;
+    }
+    recv_buffer[index].received = 0;
+}
+
+// Write contiguous packets to file
+void write_contiguous_packets(FILE *fp) {
+    int window_index = 0;
+    
+    // Write all contiguous packets from the buffer
+    while (window_index < WINDOW_SIZE && recv_buffer[window_index].received) {
+        tcp_packet *pkt = recv_buffer[window_index].packet;
+        
+        // Write packet data to file
+        fseek(fp, pkt->hdr.seqno, SEEK_SET);
+        int bytes_written = fwrite(pkt->data, 1, pkt->hdr.data_size, fp);
+        VLOG(DEBUG, "Wrote %d bytes at position %d to file", bytes_written, pkt->hdr.seqno);
+        fflush(fp);
+        
+        // Update next expected sequence number
+        next_expected_seqno = pkt->hdr.seqno + pkt->hdr.data_size;
+        
+        // Free this packet
+        free_packet_buffer(window_index);
+        
+        // Shift the window
+        for (int i = 0; i < WINDOW_SIZE-1; i++) {
+            recv_buffer[i] = recv_buffer[i+1];
+        }
+        
+        // Clear the last slot
+        recv_buffer[WINDOW_SIZE-1].received = 0;
+        recv_buffer[WINDOW_SIZE-1].packet = NULL;
+    }
+}
 
 // Sliding window variables
 window *recv_window;
@@ -127,6 +190,8 @@ int main(int argc, char **argv) {
     printf("Receiver started. Listening on port %d\n", portno);
 
     clientlen = sizeof(clientaddr);
+    init_packet_buffer();  // Initialize the packet buffer
+    
     while (1) {
         VLOG(DEBUG, "waiting from server\n");
         if (recvfrom(sockfd, buffer, MSS_SIZE, 0,
