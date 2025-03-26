@@ -20,11 +20,16 @@ parser.add_argument('--trace', '-tr',
                     help="name of the trace",
                     required=True)
 
+parser.add_argument('--cwnd', '-c',
+                    help="path to CWND.csv file",
+                    default="CWND.csv")
+
 args = parser.parse_args()
 
-fig = plt.figure(figsize=(21,3), facecolor='w')
-ax = plt.gca()
-
+# Create two separate figures
+# Figure 1: Throughput over time
+fig1 = plt.figure(figsize=(21,3), facecolor='w')
+ax1 = plt.gca()
 
 # plotting the trace file
 f1 = open (args.trace,"r")
@@ -40,7 +45,7 @@ for line in f1:
         cnt+=1
 f1.close()
 
-ax.fill_between(range(len(BW)), 0, list(map(scale,BW)),color='#D3D3D3')
+ax1.fill_between(range(len(BW)), 0, list(map(scale,BW)),color='#D3D3D3')
 
 # plotting throughput
 throughputDL = []
@@ -63,6 +68,7 @@ for time in traceDL:
         bytes = int(time.strip().split(",")[1])
         startTime += 1.0
 
+print ("Throughput Data:")
 print (timeDL)
 print (throughputDL)
 
@@ -72,4 +78,41 @@ plt.ylabel("Throughput (Mbps)")
 plt.xlabel("Time (s)")
 # plt.xlim([0,300])
 plt.grid(True, which="both")
-plt.savefig(args.dir+'/throughput.pdf',dpi=1000,bbox_inches='tight')
+plt.savefig(args.dir+'/throughput.pdf', dpi=1000, bbox_inches='tight')
+
+# Figure 2: CWND over time
+try:
+    fig2 = plt.figure(figsize=(21,3), facecolor='w')
+    ax2 = plt.gca()
+    
+    # Read CWND data from CSV file
+    cwnd_data = []
+    cwnd_time = []
+    
+    with open(args.cwnd, 'r') as f:
+        # Skip header line
+        f.readline()
+        
+        for line in f:
+            parts = line.strip().split(',')
+            if len(parts) == 2:
+                time_ms = float(parts[0])
+                cwnd_value = float(parts[1])
+                
+                # Convert time to seconds
+                cwnd_time.append(time_ms / 1000.0) 
+                cwnd_data.append(cwnd_value)
+    
+    print("\nCWND Data:")
+    print(cwnd_time)
+    print(cwnd_data)
+    
+    plt.plot(cwnd_time, cwnd_data, lw=2, color='b')
+    
+    plt.ylabel("Congestion Window Size (packets)")
+    plt.xlabel("Time (s)")
+    plt.grid(True, which="both")
+    plt.savefig(args.dir+'/cwnd.pdf', dpi=1000, bbox_inches='tight')
+    print(f"CWND plot saved to {args.dir}/cwnd.pdf")
+except Exception as e:
+    print(f"Error plotting CWND data: {str(e)}")
