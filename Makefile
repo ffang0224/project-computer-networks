@@ -7,13 +7,15 @@ SHELL = /bin/bash
 # compiling flags here
 CFLAGS = -Wall -I.
 
-LINKER = gcc -o -lm
+LINKER = gcc -o
+#LINKER_ClIENT = gcc -o -lm
 # linking flags here
 LFLAGS   = -Wall
+LFLAGS_LM   = -Wall -lm
 
 OBJDIR = ../obj
 
-CLIENT_OBJECTS := $(OBJDIR)/rdt_sender.o $(OBJDIR)/common.o $(OBJDIR)/packet.o $(OBJDIR)/window.o 
+CLIENT_OBJECTS := $(OBJDIR)/rdt_sender.o $(OBJDIR)/common.o $(OBJDIR)/packet.o $(OBJDIR)/window.o
 SERVER_OBJECTS := $(OBJDIR)/rdt_receiver.o $(OBJDIR)/common.o $(OBJDIR)/packet.o $(OBJDIR)/window.o 
 
 #Program name
@@ -27,7 +29,7 @@ TARGET:	$(OBJDIR) $(CLIENT)	$(SERVER)
 
 
 $(CLIENT):	$(CLIENT_OBJECTS)
-	$(LINKER)  $@  $(CLIENT_OBJECTS)
+	$(LINKER) $@  $(CLIENT_OBJECTS) $(LFLAGS_LM)
 	@echo "Link complete!"
 
 $(SERVER): $(SERVER_OBJECTS)
