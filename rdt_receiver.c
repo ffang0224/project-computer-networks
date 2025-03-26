@@ -188,7 +188,7 @@ int main(int argc, char **argv) {
         VLOG(DEBUG, "%lu, %d, %d", tp.tv_sec, recvpkt->hdr.data_size, recvpkt->hdr.seqno);
         
         // Write to throughput data file
-        fprintf(throughput_fp, "%lu, %d, %d\n", tp.tv_sec, recvpkt->hdr.data_size, recvpkt->hdr.seqno);
+        fprintf(throughput_fp, "%lu,%d,%d\n", tp.tv_sec, recvpkt->hdr.data_size, recvpkt->hdr.seqno);
         fflush(throughput_fp);
         
         // Calculate if this packet is within our window
