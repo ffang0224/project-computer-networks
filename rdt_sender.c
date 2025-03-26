@@ -28,6 +28,18 @@ tcp_packet *sndpkt;
 tcp_packet *recvpkt;
 sigset_t sigmask;       
 
+// Function to check if window is full
+int is_window_full() {
+    return next_seqno - send_base >= window_size * DATA_SIZE;
+}
+
+// Function to get window index for a sequence number
+int get_window_index(int seqno) {
+    return (seqno / DATA_SIZE) % window_size;
+}
+
+// Function to free window buffer at a specific index
+// ... existing code ...
 
 void resend_packets(int sig)
 {
@@ -142,8 +154,8 @@ int main (int argc, char **argv)
         //Wait for ACK
         do {
 
-            VLOG(DEBUG, "Sending packet %d to %s", 
-                    send_base, inet_ntoa(serveraddr.sin_addr));
+            VLOG(DEBUG, "Sending packet %d to %s with %d bytes", 
+                    send_base, inet_ntoa(serveraddr.sin_addr), len);
             /*
              * If the sendto is called for the first time, the system will
              * will assign a random port number so that server can send its
