@@ -42,7 +42,7 @@ void store_packet(tcp_packet *pkt, int index, int size);
 int next_seqno=0;
 int send_base=0;
 float cwnd = 1.0;          // Congestion window size (in packets)
-int ssthresh = 64;         // Slow start threshold (in packets)
+int ssthresh = 32;         // Slow start threshold (in packets)
 int cc_state = SLOW_START; // Congestion control state
 int dup_acks = 0;          // Count of duplicate ACKs
 int last_ack = 0;          // Last ACK received
@@ -96,7 +96,9 @@ int is_window_full() {
 
 // Function to get window index for a sequence number
 int get_window_index(int seqno) {
-    return (seqno / DATA_SIZE) % (int)ceil(cwnd);
+    // Use fixed window size instead of variable cwnd for index calculation
+    // This prevents issues with changing cwnd values affecting buffer indexing
+    return (seqno / DATA_SIZE) % window_size;
 }
 
 // Initialize the window buffer
@@ -115,6 +117,12 @@ void init_window_buffer(int size) {
 
 // Function to free window buffer at a specific index
 void free_window_buffer(int index) {
+    // Add bounds checking
+    if (index < 0 || index >= window_size) {
+        VLOG(INFO, "Invalid window index %d (window size: %d)", index, window_size);
+        return;
+    }
+    
     if (window_buffer[index] != NULL) {
         free(window_buffer[index]);
         window_buffer[index] = NULL;
@@ -243,6 +251,12 @@ void resend_packets(int sig)
 
 // Update RTT estimation (RFC 6298)
 void update_rtt(int measured_rtt_ms) {
+    // Validate that RTT is positive and reasonable
+    if (measured_rtt_ms <= 0 || measured_rtt_ms > 60000) {
+        VLOG(INFO, "Invalid RTT measurement: %d ms, ignoring", measured_rtt_ms);
+        return;  // Skip invalid RTT measurements
+    }
+    
     if (!rtt_measured) {
         // First measurement
         estimated_rtt = measured_rtt_ms;
